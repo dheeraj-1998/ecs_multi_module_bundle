@@ -51,9 +51,6 @@ resource "aws_iam_role" "ecs_task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
 }
 
-# Dummy subnet and SG IDs should be replaced with real ones in your environment
-# and any target group ARNs if using a load balancer.
-
 module "ecs_multi" {
   source = "./modules/ecs-multi"
 
@@ -69,16 +66,13 @@ module "ecs_multi" {
       name        = "app-cluster"
       launch_type = "FARGATE"
 
-      enable_container_insights = true
-      capacity_providers        = ["FARGATE"]
-
       services = [
         {
           name          = "api-service"
           desired_count = 2
 
-          launch_type                = "FARGATE"
-          capacity_provider_strategy = []
+          # optional launch_type override per service
+          launch_type = "FARGATE"
 
           task_execution_role_arn = aws_iam_role.ecs_task_execution.arn
           task_role_arn           = aws_iam_role.ecs_task.arn
@@ -94,11 +88,12 @@ module "ecs_multi" {
 
           log_retention_in_days = 14
 
+          # replace these with your real subnet and SG IDs
           subnets          = ["subnet-abc123", "subnet-def456"]
           security_groups  = ["sg-1234567890abcdef0"]
           assign_public_ip = true
 
-          # Example with load balancer (replace ARN with a real one)
+          # Optional load balancer example (replace ARN with a real one)
           load_balancer = {
             target_group_arn = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/example/abcd1234abcd1234"
             container_name   = "api-service"
@@ -109,9 +104,6 @@ module "ecs_multi" {
           name          = "worker-service"
           desired_count = 1
 
-          launch_type                = "FARGATE"
-          capacity_provider_strategy = []
-
           task_execution_role_arn = aws_iam_role.ecs_task_execution.arn
 
           container_image = "busybox"
@@ -119,7 +111,7 @@ module "ecs_multi" {
           cpu             = 256
           memory          = 512
 
-          environment           = {}
+          environment = {}
           log_retention_in_days = 7
 
           subnets          = ["subnet-abc123", "subnet-def456"]
@@ -135,16 +127,10 @@ module "ecs_multi" {
       name        = "batch-cluster"
       launch_type = "EC2"
 
-      enable_container_insights = false
-      capacity_providers        = []
-
       services = [
         {
           name          = "batch-worker"
           desired_count = 1
-
-          launch_type                = "EC2"
-          capacity_provider_strategy = []
 
           task_execution_role_arn = aws_iam_role.ecs_task_execution.arn
 

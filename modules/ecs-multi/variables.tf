@@ -11,36 +11,21 @@ variable "default_tags" {
 
 variable "clusters" {
   description = <<EOT
-Map of ECS clusters to create. Each cluster defines launch type / capacity provider preferences,
-logging / monitoring options, and a nested list of services.
+Map of ECS clusters to create. Each cluster has a name, a launch type, and a list of services.
+Each service defines basic task settings, networking, and optional load balancer.
 EOT
 
   type = map(object({
-    # Cluster-level config
     name        = string
     launch_type = optional(string, "FARGATE") # FARGATE or EC2
 
-    # Cluster-level logging / monitoring
-    enable_container_insights = optional(bool, true)
-
-    # Optional cluster capacity providers (e.g., ["FARGATE", "FARGATE_SPOT"])
-    capacity_providers = optional(list(string), [])
-
-    # Nested services for this cluster
     services = list(object({
       # Service basics
       name          = string
       desired_count = number
 
-      # Either use launch_type (falls back to cluster.launch_type),
-      # or capacity_provider_strategy (in which case launch_type is NOT sent to the service).
+      # Per-service launch type override (falls back to cluster.launch_type)
       launch_type = optional(string)
-
-      capacity_provider_strategy = optional(list(object({
-        capacity_provider = string
-        weight            = optional(number)
-        base              = optional(number)
-      })), [])
 
       # Task roles
       task_execution_role_arn = string
@@ -54,7 +39,7 @@ EOT
 
       environment = optional(map(string), {})
 
-      # Logging options
+      # Logging
       log_retention_in_days = optional(number, 30)
 
       # Networking

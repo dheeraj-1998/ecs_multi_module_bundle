@@ -1,24 +1,32 @@
+terraform {
+  required_version = ">= 1.0.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
+}
 
 locals {
   # Flatten clusters + services into a single map keyed by "clusterKey:serviceName"
   services = merge([
     for cluster_key, cluster in var.clusters : {
       for svc in cluster.services : "${cluster_key}:${svc.name}" => {
-        cluster_key = cluster_key
-        cluster     = cluster
-        service     = svc
+        cluster_key  = cluster_key
+        cluster_name = cluster.name
 
-        # Use capacity providers if configured (non-empty list)
-        use_capacity_provider = length(try(svc.capacity_provider_strategy, [])) > 0
-
-        # Service launch type (FARGATE or EC2) – used for task definition and ecs service
-        launch_type = coalesce(
+        # Service launch type (FARGATE or EC2) – service override or cluster default
+        launch_type = upper(coalesce(
           try(svc.launch_type, null),
           cluster.launch_type
-        )
+        ))
+
+        service = svc
       }
     }
-  ])
+  ]...)
 }
 
 # One ECS cluster per item in var.clusters
@@ -27,19 +35,9 @@ resource "aws_ecs_cluster" "this" {
 
   name = each.value.name
 
-  # Container insights
-  dynamic "setting" {
-    for_each = each.value.enable_container_insights ? [1] : []
-    content {
-      name  = "containerInsights"
-      value = "enabled"
-    }
-  }
-
   tags = merge(
     var.default_tags,
     {
-      "Name"    = each.value.name
       "Cluster" = each.value.name
     }
   )
@@ -49,13 +47,13 @@ resource "aws_ecs_cluster" "this" {
 resource "aws_cloudwatch_log_group" "service" {
   for_each = local.services
 
-  name              = "/ecs/${each.value.cluster.name}/${each.value.service.name}"
+  name              = "/ecs/${each.value.cluster_name}/${each.value.service.name}"
   retention_in_days = try(each.value.service.log_retention_in_days, 30)
 
   tags = merge(
     var.default_tags,
     {
-      "Cluster" = each.value.cluster.name
+      "Cluster" = each.value.cluster_name
       "Service" = each.value.service.name
     }
   )
@@ -65,13 +63,10 @@ resource "aws_cloudwatch_log_group" "service" {
 resource "aws_ecs_task_definition" "service" {
   for_each = local.services
 
-  family = "${each.value.cluster.name}-${each.value.service.name}"
+  family = "${each.value.cluster_name}-${each.value.service.name}"
 
-  requires_compatibilities = [
-    upper(each.value.launch_type) == "FARGATE" ? "FARGATE" : "EC2"
-  ]
-
-  network_mode = "awsvpc"
+  requires_compatibilities = [each.value.launch_type] # FARGATE or EC2
+  network_mode             = "awsvpc"
 
   cpu    = tostring(each.value.service.cpu)
   memory = tostring(each.value.service.memory)
@@ -116,7 +111,7 @@ resource "aws_ecs_task_definition" "service" {
   tags = merge(
     var.default_tags,
     {
-      "Cluster" = each.value.cluster.name
+      "Cluster" = each.value.cluster_name
       "Service" = each.value.service.name
     }
   )
@@ -131,28 +126,12 @@ resource "aws_ecs_service" "service" {
   task_definition = aws_ecs_task_definition.service[each.key].arn
   desired_count   = each.value.service.desired_count
 
-  # If using capacity provider strategy, launch_type must be null.
-  launch_type = each.value.use_capacity_provider ? null : each.value.launch_type
-
-  deployment_minimum_healthy_percent = 50
-  deployment_maximum_percent         = 200
-  scheduling_strategy                = "REPLICA"
+  launch_type = each.value.launch_type
 
   network_configuration {
     subnets          = each.value.service.subnets
     security_groups  = each.value.service.security_groups
     assign_public_ip = try(each.value.service.assign_public_ip, false) ? "ENABLED" : "DISABLED"
-  }
-
-  # Optional capacity provider strategy per service
-  dynamic "capacity_provider_strategy" {
-    for_each = each.value.use_capacity_provider ? each.value.service.capacity_provider_strategy : []
-
-    content {
-      capacity_provider = capacity_provider_strategy.value.capacity_provider
-      weight            = try(capacity_provider_strategy.value.weight, null)
-      base              = try(capacity_provider_strategy.value.base, null)
-    }
   }
 
   # Optional load balancer association
@@ -172,15 +151,10 @@ resource "aws_ecs_service" "service" {
     }
   }
 
-  lifecycle {
-    # So you can update the task definition out-of-band if needed
-    ignore_changes = [task_definition]
-  }
-
   tags = merge(
     var.default_tags,
     {
-      "Cluster" = each.value.cluster.name
+      "Cluster" = each.value.cluster_name
       "Service" = each.value.service.name
     }
   )
